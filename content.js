@@ -78,86 +78,72 @@
   // 1) 优先找带明显 “You/你” 的消息容器（aria/label）
   // 2) 再找看起来像“对话气泡”的块，过滤掉模型输出
   function findUserMessageNodesGemini() {
-  // 1) 更可靠地找输入框（Gemini 可能是 textarea 或 contenteditable）
-  const composer =
-    document.querySelector("textarea") ||
-    document.querySelector('[contenteditable="true"]') ||
-    document.querySelector('div[role="textbox"]');
+  // 对话范围尽量限制在 main，避免抓到左侧 Chats 列表
+  const main = document.querySelector("main") || document.body;
 
-  // 2) 找“对话根容器”：从输入框往上找最近的可滚动大容器
-  //    如果找不到输入框，则退化为 document.body
-  const start = composer || document.body;
+  // 1) 先用“编辑(铅笔)”按钮定位用户消息（最稳）
+  const editButtons = Array.from(
+    main.querySelectorAll(
+      "button[aria-label*='Edit'], button[aria-label*='edit'], button[aria-label*='编辑']"
+    )
+  );
 
-  function isScrollable(el) {
-    if (!(el instanceof HTMLElement)) return false;
-    const style = getComputedStyle(el);
-    const overflowY = style.overflowY;
-    const canScroll = (overflowY === "auto" || overflowY === "scroll");
-    return canScroll && el.scrollHeight > el.clientHeight + 50;
+  const userNodes = [];
+
+  for (const btn of editButtons) {
+    // Gemini 的编辑按钮一般在用户气泡右侧附近
+    // 往上找一个相对小的容器，避免直接拿到 main
+    const container =
+      btn.closest("[role='listitem'], article, section, div") || btn.parentElement;
+
+    if (!container) continue;
+
+    // 用户气泡通常是编辑按钮的同一行/同一块，优先取 container 内最像“气泡文本”的节点
+    // 做法：在 container 里找文本最多、且不包含大量按钮/链接的块
+    const candidates = Array.from(container.querySelectorAll("div, span, p"))
+      .filter((n) => n instanceof HTMLElement)
+      .map((n) => ({ n, t: (n.innerText || "").trim() }))
+      .filter((x) => x.t.length >= 1 && x.t.length <= 800);
+
+    if (!candidates.length) continue;
+
+    candidates.sort((a, b) => b.t.length - a.t.length);
+    const best = candidates[0].n;
+
+    // 排除明显不是用户消息的：包含赞/踩等反馈按钮的一般是模型回复区
+    const hasFeedback =
+      container.querySelector(
+        "button[aria-label*='Like'],button[aria-label*='Dislike'],button[aria-label*='赞'],button[aria-label*='踩']"
+      ) !== null;
+
+    if (hasFeedback) continue;
+
+    // 排除 sidebar/nav 区域
+    if (best.closest("nav, aside, [role='navigation']")) continue;
+
+    userNodes.push(best);
   }
 
-  let chatRoot = null;
-  let p = start;
-  for (let i = 0; i < 10 && p; i++) {
-    if (isScrollable(p)) { chatRoot = p; break; }
-    p = p.parentElement;
-  }
-  // 兜底：Gemini 常见会有 main；但没有也不致命
-  if (!chatRoot) chatRoot = document.querySelector("main") || document.body;
-
-  // 3) 排除明显的非对话区域（侧栏/导航/顶部栏）
-  const inNonChatArea = (node) =>
-    Boolean(node.closest("nav, aside, header, footer, [role='navigation']"));
-
-  // 4) 在对话根容器里抓“文本块候选”
-  //    注意：不要只依赖 role=listitem，Gemini 经常没有
-  const all = Array.from(chatRoot.querySelectorAll("article, section, div"));
-
-  // 5) 过滤出“像消息”的块
-  const candidates = all.filter((n) => {
-    if (!(n instanceof HTMLElement)) return false;
-    if (inNonChatArea(n)) return false;
-
+  // 2) 去重：有时同一条会被抓到多次
+  const uniq = Array.from(new Set(userNodes)).filter((n) => {
     const t = (n.innerText || "").trim();
     if (!t) return false;
 
-    // 长度：太短像按钮/菜单；太长像整页容器
-    if (t.length < 8) return false;
-    if (t.length > 1500) return false;
-
-    // 排除明显 UI 文案区域（比之前更少、更保守，避免误杀）
-    const bad = ["Settings", "Help", "Feedback", "New chat", "历史记录", "设置"];
-    if (bad.some((h) => t === h)) return false;
-
-    // 排除“历史列表”特征：短文本 + 大量链接/按钮
-    const links = n.querySelectorAll("a[href]").length;
-    const buttons = n.querySelectorAll("button").length;
-    if (t.length < 200 && (links >= 2 || buttons >= 4)) return false;
+    // 排除免责声明/固定文案
+    const badTexts = [
+      "Gemini can make mistakes",
+      "double-check it",
+      "Gemini 可能会出错",
+      "请核对"
+    ];
+    if (badTexts.some((s) => t.includes(s))) return false;
 
     return true;
   });
 
-  // 6) 去重：只保留“最小可用块”（避免父容器把子块都包进去）
-  //    规则：如果一个节点包含另一个节点且文本几乎相同，保留更小的那个
-  const uniq = Array.from(new Set(candidates));
-
-  const finalList = uniq.filter((n) => {
-    const t = n.innerText.trim();
-    // 如果存在子节点文本也差不多，说明它太大，丢掉
-    for (const child of uniq) {
-      if (child === n) continue;
-      if (n.contains(child)) {
-        const ct = child.innerText.trim();
-        if (ct && ct.length >= 8 && Math.abs(ct.length - t.length) < 20) {
-          return false;
-        }
-      }
-    }
-    return true;
-  });
-
-  return finalList;
+  return uniq;
 }
+
 
 
 
