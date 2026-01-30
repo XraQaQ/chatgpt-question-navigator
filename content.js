@@ -80,100 +80,50 @@
   function findUserMessageNodesGemini() {
   const main = document.querySelector("main") || document.body;
 
-  // 1) 找输入框容器（用于排除 Tools/Fast 等输入区 UI 文本）
-  const composer =
-    document.querySelector("textarea") ||
-    document.querySelector('[contenteditable="true"]') ||
-    document.querySelector('div[role="textbox"]');
+  // Gemini 的「用户消息」是：右对齐的小气泡（pill）
+  // 样式特征：position + align-self / margin-left:auto
+  const allDivs = Array.from(main.querySelectorAll("div"));
 
-  const composerContainer =
-    (composer && (composer.closest("form") || composer.closest("footer") || composer.closest("div"))) || null;
+  const userBubbles = allDivs.filter((el) => {
+    if (!(el instanceof HTMLElement)) return false;
 
-  // 帮助函数：是否在输入区
-  const inComposer = (node) => composerContainer && composerContainer.contains(node);
+    const text = (el.innerText || "").trim();
+    if (!text) return false;
 
-  // 2) 识别 assistant 回复块（你这套 Gemini UI 的按钮可能没 aria-label，所以加 Material icon 兜底）
-  // 2.1 aria-label 版
-  const feedbackBtns = Array.from(
-    main.querySelectorAll(
-      "button[aria-label*='Like'],button[aria-label*='Dislike'],button[aria-label*='赞'],button[aria-label*='踩'],button[aria-label*='Copy'],button[aria-label*='复制']"
-    )
-  );
+    // 长度限制：避免抓到整段回答
+    if (text.length < 1 || text.length > 200) return false;
 
-  // 2.2 Material Icons 版（常见：<mat-icon>thumb_up</mat-icon>）
-  const thumbIcons = Array.from(
-    main.querySelectorAll("mat-icon, span, i")
-  ).filter((n) => {
-    const t = (n.textContent || "").trim();
-    return t === "thumb_up" || t === "thumb_down" || t === "content_copy";
-  });
+    const style = getComputedStyle(el);
 
-  const assistantBlocks = new Set();
+    // 核心判断：右对齐
+    const isRightAligned =
+      style.alignSelf === "flex-end" ||
+      style.marginLeft === "auto" ||
+      el.closest("[style*='margin-left: auto']");
 
-  function addAssistantBlockFromNode(n) {
-    const block =
-      n.closest("[role='listitem']") ||
-      n.closest("article") ||
-      n.closest("section") ||
-      n.closest("div");
-    if (block) assistantBlocks.add(block);
-  }
+    if (!isRightAligned) return false;
 
-  feedbackBtns.forEach(addAssistantBlockFromNode);
-  thumbIcons.forEach(addAssistantBlockFromNode);
-
-  // 3) 用户消息候选：限制在 main 内，且不在 nav/aside/header/footer，也不在 composer
-  const inNonChatArea = (node) =>
-    Boolean(node.closest("nav, aside, header, footer, [role='navigation']"));
-
-  // 你截图里用户消息是右上角“短气泡”，所以先找短文本“叶子节点”
-  const candidates = Array.from(main.querySelectorAll("div, p, span"))
-    .filter((n) => n instanceof HTMLElement)
-    .filter((n) => !inNonChatArea(n))
-    .filter((n) => !inComposer(n));
-
-  const userNodes = candidates.filter((n) => {
-    const t = (n.innerText || "").trim();
-    if (!t) return false;
-
-    // 排除明显 UI 文本（你截图里就是 Tools / Fast）
-    const uiBadExact = new Set(["Tools", "Fast", "PRO"]);
-    if (uiBadExact.has(t)) return false;
-
-    // 排除免责声明
-    if (t.includes("Gemini can make mistakes") || t.includes("double-check it")) return false;
-
-    // 长度：用户输入通常较短
-    if (t.length < 2 || t.length > 300) return false;
-
-    // 含过多按钮/链接的不是气泡
-    if (n.querySelectorAll("button").length >= 2) return false;
-    if (n.querySelectorAll("a[href]").length >= 1) return false;
-
-    // 如果落在 assistant 回复块内，排除（把 Gemini 回复过滤掉）
-    for (const ab of assistantBlocks) {
-      if (ab && ab.contains(n)) return false;
-    }
-
-    // 去掉重复：如果父节点文本完全相同，优先父节点（或叶子），这里保留更叶子的
-    const parent = n.parentElement;
-    if (parent) {
-      const pt = (parent.innerText || "").trim();
-      if (pt === t && parent.querySelectorAll("div, p, span").length <= 4) {
-        return false;
-      }
-    }
+    // 排除明显 UI
+    if (text === "PRO" || text === "Tools" || text === "Fast") return false;
+    if (text.includes("Gemini can make mistakes")) return false;
 
     return true;
   });
 
-  return Array.from(new Set(userNodes));
+  // 去重（有时会抓到内外两层）
+  const unique = [];
+  const seen = new Set();
+
+  for (const n of userBubbles) {
+    const t = n.innerText.trim();
+    if (!seen.has(t)) {
+      seen.add(t);
+      unique.push(n);
+    }
+  }
+
+  return unique;
 }
-
-
-
-
-
 
 
   function findUserMessageNodes() {
