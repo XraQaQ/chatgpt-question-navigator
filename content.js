@@ -138,7 +138,58 @@
 
       // 选一个“像正文区”的：包含回复按钮、并且尽量不要把整个 header/sidebar 包进来
       if (hasAssistant && hasComposer) {
-        scope
+        scope = el;
+        break;
+      }
+      cur = el.parentElement;
+    }
+  }
+  if (!scope) scope = main;
+
+  // 3) 强排除区域：header/nav/aside/footer
+  const inNonChatArea = (node) =>
+    Boolean(node.closest("nav, aside, header, footer, [role='navigation']"));
+
+  // 4) 用户消息候选：短文本、独立、且不在 assistantBlocks 内
+  const candidates = Array.from(scope.querySelectorAll("div, p, span"))
+    .filter((n) => n instanceof HTMLElement)
+    .filter((n) => !inNonChatArea(n));
+
+  const userNodes = candidates.filter((n) => {
+    const t = (n.innerText || "").trim();
+    if (!t) return false;
+
+    // ---- 关键排除：UI/无关文本 ----
+    // PRO、免责声明、按钮文案等
+    if (t === "PRO") return false;
+    if (t.includes("Gemini can make mistakes") || t.includes("double-check it")) return false;
+    if (t.includes("Settings") || t.includes("Help") || t.includes("Feedback")) return false;
+
+    // 长度：用户输入通常不太长（你截图里是短气泡）
+    if (t.length < 2 || t.length > 300) return false;
+
+    // 不是“工具区/列表项”：含大量按钮/链接的一律排除
+    if (n.querySelectorAll("button").length >= 2) return false;
+    if (n.querySelectorAll("a[href]").length >= 1) return false;
+
+    // ---- 排除模型回复：如果在任意 assistantBlocks 里就不要 ----
+    for (const ab of assistantBlocks) {
+      if (ab && ab.contains(n)) return false;
+    }
+
+    // ---- 去掉重复：只保留更“叶子”的节点 ----
+    const parent = n.parentElement;
+    if (parent) {
+      const pt = (parent.innerText || "").trim();
+      if (pt === t && parent.querySelectorAll("div, p, span").length <= 3) return false;
+    }
+
+    return true;
+  });
+
+  // 5) 去重
+  return Array.from(new Set(userNodes));
+}
 
 
 
