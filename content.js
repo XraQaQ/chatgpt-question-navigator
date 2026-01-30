@@ -80,87 +80,66 @@
   function findUserMessageNodesGemini() {
   const main = document.querySelector("main") || document.body;
 
-  // ----- A) 优先策略：有“编辑/Edit”按钮就用它定位用户气泡 -----
-  const editBtns = Array.from(
-    main.querySelectorAll(
-      "button[aria-label*='Edit'],button[aria-label*='edit'],button[aria-label*='编辑']"
-    )
-  );
+  const composer =
+    document.querySelector("textarea") ||
+    document.querySelector('[contenteditable="true"]') ||
+    document.querySelector('div[role="textbox"]');
 
-  const byEdit = [];
-  for (const btn of editBtns) {
-    const container = btn.closest("[role='listitem'], article, section, div");
-    if (!container) continue;
-
-    // 如果这个块里有 Like/Dislike，通常是模型回复块，不要
-    const hasFeedback = container.querySelector(
-      "button[aria-label*='Like'],button[aria-label*='Dislike'],button[aria-label*='赞'],button[aria-label*='踩']"
-    );
-    if (hasFeedback) continue;
-
-    const txt = (container.innerText || "").trim();
-    if (!txt) continue;
-
-    byEdit.push(container);
-  }
-
-  if (byEdit.length) {
-    return Array.from(new Set(byEdit));
-  }
-
-  // ----- B) fallback：没有编辑按钮时 -----
-  // 1) 先找“模型回复块”：它们通常带 Like/Dislike/复制 等操作按钮
-  const feedbackButtons = Array.from(
+  // 1) 更强的“模型回复块”识别：从反馈按钮往上找能包含正文的祖先
+  const feedbackBtns = Array.from(
     main.querySelectorAll(
       "button[aria-label*='Like'],button[aria-label*='Dislike'],button[aria-label*='赞'],button[aria-label*='踩'],button[aria-label*='Copy'],button[aria-label*='复制']"
     )
   );
 
+  function pickAssistantBlock(btn) {
+    let cur = btn;
+    for (let i = 0; i < 12 && cur; i++) {
+      const el = cur instanceof HTMLElement ? cur : cur.parentElement;
+      if (!el) break;
+
+      const t = (el.innerText || "").trim();
+      // 这几个条件的目的：祖先块要“像一条完整回复”，而不是按钮工具条
+      const hasSomeText = t.length >= 20;
+      const notTooHuge = t.length <= 8000;
+      const hasNotOnlyUI = !/^(\s*(Like|Dislike|Copy|分享|复制|赞|踩|更多|More)\s*)+$/i.test(t);
+      const containsBtn = el.querySelector("button") !== null;
+
+      if (hasSomeText && notTooHuge && hasNotOnlyUI && containsBtn) {
+        // 再确保它确实包含这个反馈按钮
+        if (el.contains(btn)) return el;
+      }
+      cur = el.parentElement;
+    }
+    return btn.closest("[role='listitem'], article, section, div") || btn.parentElement;
+  }
+
   const assistantBlocks = new Set();
-  for (const b of feedbackButtons) {
-    const block = b.closest("[role='listitem'], article, section, div");
+  for (const b of feedbackBtns) {
+    const block = pickAssistantBlock(b);
     if (block) assistantBlocks.add(block);
   }
 
-  // 2) 在 main 内找“像用户气泡”的短文本块：短、独立、且不在 assistantBlocks 内
-  const candidates = Array.from(main.querySelectorAll("div, p, span"))
-    .filter((n) => n instanceof HTMLElement)
-    .filter((n) => !n.closest("nav, aside, header, footer, [role='navigation']"));
+  // 2) 限定搜索范围：尽量在“对话正文区域”里找，减少抓到 header / sidebar
+  //    找一个同时包含：至少一个 assistantBlock 且靠近输入框 的容器
+  let scope = null;
+  const firstAssistant = assistantBlocks.values().next().value;
 
-  const userNodes = candidates.filter((n) => {
-    const t = (n.innerText || "").trim();
-    if (!t) return false;
+  if (firstAssistant) {
+    let cur = firstAssistant;
+    for (let i = 0; i < 10 && cur; i++) {
+      const el = cur instanceof HTMLElement ? cur : cur.parentElement;
+      if (!el) break;
 
-    // 排除免责声明
-    if (t.includes("Gemini can make mistakes") || t.includes("double-check")) return false;
+      const hasAssistant = el.querySelector(
+        "button[aria-label*='Like'],button[aria-label*='Dislike'],button[aria-label*='赞'],button[aria-label*='踩']"
+      );
+      const hasComposer = composer ? el.contains(composer) : true;
 
-    // 用户消息通常比较短（你截图就是一个短 pill）
-    if (t.length < 2 || t.length > 250) return false;
+      // 选一个“像正文区”的：包含回复按钮、并且尽量不要把整个 header/sidebar 包进来
+      if (hasAssistant && hasComposer) {
+        scope
 
-    // 避免抓到大容器：如果包含很多子元素/按钮/链接，通常不是气泡本体
-    if (n.querySelectorAll("button").length >= 2) return false;
-    if (n.querySelectorAll("a[href]").length >= 1) return false;
-
-    // 不能在模型回复块里面
-    for (const ab of assistantBlocks) {
-      if (ab.contains(n)) return false;
-    }
-
-    // 尽量取“更接近叶子”的节点，减少重复
-    const parent = n.parentElement;
-    if (parent) {
-      const pt = (parent.innerText || "").trim();
-      if (pt === t && parent.querySelectorAll("div, p, span").length <= 3) {
-        return false;
-      }
-    }
-
-    return true;
-  });
-
-  // 3) 去重
-  return Array.from(new Set(userNodes));
-}
 
 
 
